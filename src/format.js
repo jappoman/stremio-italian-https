@@ -17,8 +17,13 @@ function sanitizeTitle(value) {
 
 function filename({ title, year, season, episode, quality, ext }) {
   let out = sanitizeTitle(title);
+  out = out.replace(/\bS(\d{1,2})E(\d{1,3})\b/gi, (_match, parsedSeason, parsedEpisode) => (
+    `S${String(parsedSeason).padStart(2, '0')}E${String(parsedEpisode).padStart(2, '0')}`
+  ));
   if (year) out += ` (${year})`;
-  if (Number.isInteger(season) && Number.isInteger(episode)) {
+  // Resolvers may already include SxxExx in the display title.  Keep a
+  // filename parseable by AIOStreams without repeating the same episode.
+  if (Number.isInteger(season) && Number.isInteger(episode) && !/\bS\d{1,2}E\d{1,3}\b/i.test(out)) {
     out += `.S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
   }
   if (quality) out += `.${quality}`;
@@ -36,7 +41,7 @@ function formatBytes(bytes) {
 
 function buildStream({ source, title, url, year, season, episode, quality, language = 'ita', sizeBytes, ext, streamFormat = 'aio' }) {
   const name = filename({ title, year, season, episode, quality, ext: ext || extension(url) });
-  if (streamFormat === 'normal') return { name: source, title: title || name, url };
+  if (streamFormat === 'classic') return { name: source, title: title || name, url };
   const languageLabel = languageFromCode(language);
   const description = [name, formatBytes(sizeBytes) && `📦 ${formatBytes(sizeBytes)}`, languageLabel].filter(Boolean).join('\n');
   const behaviorHints = { filename: name, notWebReady: /\.m3u8(?:$|\?)/i.test(url) };

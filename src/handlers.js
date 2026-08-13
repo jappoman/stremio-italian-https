@@ -16,11 +16,16 @@ function parseId(id) {
 
 async function stream({ type, id }, streamFormat = 'aio') {
   const parsed = parseId(id);
-  if (!parsed || !['movie', 'series', 'anime'].includes(type)) return { streams: [] };
+  if (!parsed || !['movie', 'series', 'anime'].includes(type)) {
+    console.info(`[stream] ignored type=${type} id=${id}: unsupported ID or type`);
+    return { streams: [] };
+  }
   if (type === 'movie' && (parsed.season || parsed.episode)) return { streams: [] };
   if (type === 'series' && (!parsed.season || !parsed.episode)) return { streams: [] };
   if (type === 'anime' && (!parsed.externalId.startsWith('kitsu:') || !parsed.episode)) return { streams: [] };
+  console.info(`[stream] request type=${type} id=${parsed.externalId} season=${parsed.season || '-'} episode=${parsed.episode || '-'} format=${streamFormat}`);
   const candidates = await resolveDirectStreams({ type, id: parsed.externalId, season: parsed.season, episode: parsed.episode });
+  console.info(`[stream] returning ${candidates.length} verified stream(s) for ${parsed.externalId}`);
   return {
     streams: candidates.map((candidate) => buildStream({ ...candidate, season: parsed.season, episode: parsed.episode, streamFormat })),
     cacheMaxAge: 300,

@@ -6,10 +6,25 @@
  * Keeping the gate here prevents accidentally reintroducing StreamViX's
  * proxy-only integrations.
  */
-async function isBareDirectUrl(url, { timeoutMs = 8000 } = {}) {
+function safeUrlLabel(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return '<invalid URL>';
+  }
+}
+
+async function isBareDirectUrl(url, { timeoutMs = 8000, source = 'source' } = {}) {
   let parsed;
-  try { parsed = new URL(url); } catch { return false; }
-  if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+  try { parsed = new URL(url); } catch {
+    console.info(`[probe][${source}] URL non valido`);
+    return false;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    console.info(`[probe][${source}] protocollo non supportato: ${parsed.protocol}`);
+    return false;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -19,10 +34,16 @@ async function isBareDirectUrl(url, { timeoutMs = 8000 } = {}) {
       redirect: 'follow',
       signal: controller.signal,
     });
-    if (!response.ok && response.status !== 206) return false;
+    if (!response.ok && response.status !== 206) {
+      console.info(`[probe][${source}] ${safeUrlLabel(url)} -> HTTP ${response.status}: SCARTATO`);
+      return false;
+    }
     const type = response.headers.get('content-type') || '';
-    return /video|audio|mpegurl|octet-stream/i.test(type) || /\.(?:m3u8|mp4|mkv|webm|ts)(?:$|[?#])/i.test(response.url);
-  } catch {
+    const accepted = /video|audio|mpegurl|octet-stream/i.test(type) || /\.(?:m3u8|mp4|mkv|webm|ts)(?:$|[?#])/i.test(response.url);
+    console.info(`[probe][${source}] ${safeUrlLabel(url)} -> HTTP ${response.status}, content-type=${type || '-'}: ${accepted ? 'OK' : 'SCARTATO'}`);
+    return accepted;
+  } catch (error) {
+    console.info(`[probe][${source}] ${safeUrlLabel(url)} -> errore ${error.name || 'di rete'}: SCARTATO`);
     return false;
   } finally {
     clearTimeout(timer);
@@ -43,12 +64,79 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function comparableTitle(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function comparableAnimeWorldTitle(value) {
+  return comparableTitle(String(value || '').replace(/\s*\((?:sub\s*)?ita\)\s*$/i, ''));
+}
+
+async function cinemetaMetaFor(externalId, type) {
+  if (!/^tt\d+$/i.test(externalId)) return null;
+  const data = await fetchJson(`https://v3-cinemeta.strem.io/meta/${type}/${externalId}.json`);
+  return data?.meta || null;
+}
+
 async function tmdbIdFor(externalId, type) {
   if (/^tmdb\d+$/i.test(externalId)) return externalId.replace(/^tmdb/i, '');
   if (!/^tt\d+$/i.test(externalId)) return null;
   const data = await fetchJson(`https://api.themoviedb.org/3/find/${externalId}?api_key=${TMDB_KEY}&external_source=imdb_id`);
   const entries = type === 'movie' ? data.movie_results : data.tv_results;
-  return entries && entries[0] ? String(entries[0].id) : null;
+  if (entries && entries[0]) return String(entries[0].id);
+
+  // Some localized/dub IMDb entries are not linked by TMDB.  Cinemeta still
+  // knows their canonical display title, which lets us make a conservative,
+  // exact-title TMDB lookup without guessing between similarly named shows.
+  const meta = await cinemetaMetaFor(externalId, type);
+  const title = String(meta?.name || '').trim();
+  if (!title) return null;
+  const endpoint = type === 'movie' ? 'movie' : 'tv';
+  const search = await fetchJson(`https://api.themoviedb.org/3/search/${endpoint}?api_key=${TMDB_KEY}&language=it-IT&query=${encodeURIComponent(title)}`);
+  const match = (search.results || []).find((result) => comparableTitle(result.title || result.name) === comparableTitle(title)
+    || comparableTitle(result.original_title || result.original_name) === comparableTitle(title));
+  if (match) {
+    console.info(`[TMDB] ${externalId} non collegato da /find; Cinemeta=${JSON.stringify(title)} -> corrispondenza esatta TMDB ${match.id}`);
+    return String(match.id);
+  }
+  console.info(`[TMDB] ${externalId} non collegato da /find; Cinemeta=${JSON.stringify(title)} -> nessuna corrispondenza TMDB esatta`);
+  return null;
+}
+
+function uniqueTitles(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const title = String(value || '').trim();
+    const key = title.toLocaleLowerCase();
+    if (!title || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// IDs from Cinemeta are language-independent.  Text-search sources, however,
+// need titles in the language used by their catalogue, so retain localized,
+// original and alternative titles instead of relying on a single display name.
+async function tmdbSeriesSearchData(externalId) {
+  const tmdbId = await tmdbIdFor(externalId, 'series');
+  if (!tmdbId) return null;
+  const data = await fetchJson(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_KEY}&language=it-IT&append_to_response=alternative_titles`);
+  const titles = uniqueTitles([
+    data.name,
+    data.original_name,
+    ...(data.alternative_titles?.results || []).map((item) => item.title),
+  ]);
+  const isAnimation = (data.genres || []).some((genre) => genre.id === 16);
+  console.info(`[TMDB] ${externalId} -> serie ${tmdbId}; animazione=${isAnimation ? 'sì' : 'no'}; titoli=${titles.map((title) => JSON.stringify(title)).join(', ') || '-'}`);
+  return {
+    isAnimation,
+    titles,
+  };
 }
 
 /** Direct StreamViX StreamingCommunity/VixSrc route, without its proxy modes. */
@@ -57,30 +145,50 @@ const vixsrc = {
   async resolve(request) {
     try {
       const tmdbId = await tmdbIdFor(request.id, request.type);
-      if (!tmdbId) return [];
+      if (!tmdbId) {
+        console.info(`[VixSrc] Nessun ID TMDB trovato per ${request.id}`);
+        return [];
+      }
       const contentPath = request.type === 'movie'
         ? `/movie/${tmdbId}/`
         : `/tv/${tmdbId}/${request.season}/${request.episode}/`;
       const pageUrl = `https://vixsrc.to${contentPath}`;
       const apiUrl = `https://vixsrc.to${contentPath.replace(/^\/(movie|tv)\//, '/api/$1/')}`;
-      const api = await fetchJson(apiUrl);
-      if (!api || !api.src) return [];
+      console.info(`[VixSrc] ${request.id} -> TMDB ${tmdbId}; consulto ${safeUrlLabel(apiUrl)}`);
+      const apiResponse = await fetch(apiUrl, { headers: { Accept: 'application/json, text/plain, */*', Referer: 'https://vixsrc.to/' }, signal: AbortSignal.timeout(10000) });
+      console.info(`[VixSrc] API -> HTTP ${apiResponse.status}`);
+      if (!apiResponse.ok) return [];
+      const api = await apiResponse.json();
+      if (!api || !api.src) {
+        console.info('[VixSrc] API valida ma senza campo src');
+        return [];
+      }
       const embedUrl = new URL(api.src, 'https://vixsrc.to').toString();
       const embed = await fetch(embedUrl, { headers: { Referer: pageUrl }, signal: AbortSignal.timeout(10000) });
+      console.info(`[VixSrc] embed ${safeUrlLabel(embedUrl)} -> HTTP ${embed.status}`);
       if (!embed.ok) return [];
       const html = await embed.text();
       const token = /'token':\s*'([\w-]+)'/.exec(html)?.[1];
       const expires = /'expires':\s*'(\d+)'/.exec(html)?.[1];
       const rawUrl = /url:\s*'([^']+)'/.exec(html)?.[1];
-      if (!token || !expires || !rawUrl) return [];
+      if (!token || !expires || !rawUrl) {
+        console.info(`[VixSrc] embed analizzato: token=${Boolean(token)}, scadenza=${Boolean(expires)}, playlist=${Boolean(rawUrl)}; nessuno stream`);
+        return [];
+      }
       const playlist = new URL(rawUrl, 'https://vixsrc.to');
       if (!/\.m3u8$/i.test(playlist.pathname)) playlist.pathname += '.m3u8';
       playlist.searchParams.set('token', token);
       playlist.searchParams.set('expires', expires);
       if (/canPlayFHD\s*=\s*true/.test(html)) playlist.searchParams.set('h', '1');
+      let displayTitle;
+      try {
+        displayTitle = (await cinemetaMetaFor(request.id, request.type))?.name;
+      } catch (error) {
+        console.info(`[VixSrc] titolo Cinemeta non disponibile: ${error.message}`);
+      }
       return [{
         source: this.name,
-        title: request.type === 'movie' ? 'StreamingCommunity' : `StreamingCommunity S${request.season}E${request.episode}`,
+        title: displayTitle || (request.type === 'movie' ? 'StreamingCommunity' : `StreamingCommunity S${request.season}E${request.episode}`),
         url: playlist.toString(),
         language: 'ita',
       }];
@@ -114,7 +222,7 @@ async function awFetch(path, init = {}) {
     body = await response.text();
   }
   if (!response.ok) throw new Error(`AnimeWorld HTTP ${response.status}`);
-  return { body, headers };
+  return { body, headers, status: response.status };
 }
 
 function animeWorldMediaUrl(html) {
@@ -125,25 +233,58 @@ function animeWorldMediaUrl(html) {
 const animeWorld = {
   name: 'AnimeWorld',
   async resolve(request) {
-    if (request.type !== 'anime' || !/^kitsu:\d+$/i.test(request.id) || !request.episode) return [];
+    if (!request.episode) return [];
     try {
-      const kitsuId = request.id.slice('kitsu:'.length);
-      const kitsu = await fetchJson(`https://kitsu.io/api/edge/anime/${kitsuId}`);
-      const title = kitsu?.data?.attributes?.titles?.en || kitsu?.data?.attributes?.titles?.en_jp || kitsu?.data?.attributes?.canonicalTitle;
-      if (!title) return [];
-      const search = await awFetch(`/filter?keyword=${encodeURIComponent(title)}`);
-      const matches = [...search.body.matchAll(/href=["'](?:https?:\/\/[^"']+)?\/play\/([^/?#"']+)/gi)].map((match) => match[1]);
-      const slug = matches[0];
-      if (!slug) return [];
+      let titles;
+      if (request.type === 'anime' && /^kitsu:\d+$/i.test(request.id)) {
+        const kitsuId = request.id.slice('kitsu:'.length);
+        const kitsu = await fetchJson(`https://kitsu.io/api/edge/anime/${kitsuId}`);
+        titles = uniqueTitles([
+          kitsu?.data?.attributes?.titles?.en,
+          kitsu?.data?.attributes?.titles?.en_jp,
+          kitsu?.data?.attributes?.canonicalTitle,
+        ]);
+      } else if (request.type === 'series') {
+        const metadata = await tmdbSeriesSearchData(request.id);
+        if (!metadata?.isAnimation) {
+          console.info(`[AnimeWorld] ${request.id} non è classificato come animazione da TMDB: fallback non eseguito`);
+          return [];
+        }
+        titles = metadata.titles;
+      } else {
+        return [];
+      }
+      let title;
+      let slug;
+      for (const candidateTitle of titles) {
+        const search = await awFetch(`/filter?keyword=${encodeURIComponent(candidateTitle)}`);
+        const matches = [...search.body.matchAll(/<a\b[^>]*href=["'](?:https?:\/\/[^"']+)?\/play\/([^/?#"']+)[^>]*data-jtitle=["']([^"']+)/gi)]
+          .map((match) => ({ slug: match[1], title: match[2] }));
+        const distinctMatches = [...new Map(matches.map((match) => [match.slug, match])).values()];
+        const exact = distinctMatches.find((match) => comparableAnimeWorldTitle(match.title) === comparableTitle(candidateTitle));
+        console.info(`[AnimeWorld] ricerca ${JSON.stringify(candidateTitle)} -> HTTP ${search.status}, ${distinctMatches.length} risultati${distinctMatches.length ? `: ${distinctMatches.slice(0, 3).map((match) => JSON.stringify(match.title)).join(', ')}` : ''}`);
+        if (exact) {
+          title = candidateTitle;
+          slug = exact.slug;
+          console.info(`[AnimeWorld] corrispondenza esatta: ${JSON.stringify(exact.title)} -> ${slug}`);
+          break;
+        }
+      }
+      if (!slug) {
+        console.info('[AnimeWorld] nessun titolo ha prodotto una corrispondenza');
+        return [];
+      }
       const play = await awFetch(`/play/${slug}`);
       const anchors = [...play.body.matchAll(/<a\b[^>]*data-episode-num=["']?(\d+)[^>]*href=["']([^"']+)/gi)];
       const anchor = anchors.find((match) => Number(match[1]) === Number(request.episode));
       const token = anchor && /\/play\/[^/]+\/([^/?#]+)/.exec(anchor[2])?.[1];
+      console.info(`[AnimeWorld] pagina ${slug} -> HTTP ${play.status}, episodi trovati=${anchors.length}, episodio richiesto=${request.episode}: ${token ? 'trovato' : 'non trovato'}`);
       if (!token) return [];
       const player = await awFetch(`/api/episode/serverPlayerAnimeWorld?id=${encodeURIComponent(token)}`, {
         headers: { 'x-requested-with': 'XMLHttpRequest', referer: `${AW_BASE}/play/${slug}/${token}` },
       });
       const url = animeWorldMediaUrl(player.body);
+      console.info(`[AnimeWorld] player episodio ${request.episode} -> HTTP ${player.status}, media=${url ? safeUrlLabel(url) : 'non trovato'}`);
       return url ? [{ source: this.name, title: `${title} S${request.season || 1}E${request.episode}`, url, language: /_ITA\.mp4/i.test(url) ? 'ita' : 'jpn' }] : [];
     } catch (error) {
       console.warn('[direct][animeworld] skipped:', error.message);
@@ -156,10 +297,31 @@ const animeWorld = {
 const sources = [vixsrc, animeWorld];
 
 async function resolveDirectStreams(request) {
-  const settled = await Promise.allSettled(sources.map((source) => source.resolve(request)));
-  const candidates = settled.flatMap((result) => result.status === 'fulfilled' && Array.isArray(result.value) ? result.value : []);
-  const verified = await Promise.all(candidates.map(async (candidate) => ({ candidate, ok: await isBareDirectUrl(candidate.url) })));
-  return verified.filter(({ ok }) => ok).map(({ candidate }) => candidate);
+  const outcomes = [];
+  for (const source of sources) {
+    let candidates = [];
+    try {
+      const result = await source.resolve(request);
+      candidates = Array.isArray(result) ? result : [];
+    } catch (error) {
+      console.warn(`[direct][${source.name}] skipped:`, error.message);
+      outcomes.push(`${source.name}:error`);
+      continue;
+    }
+    outcomes.push(`${source.name}:${candidates.length}`);
+    console.info(`[direct] ${source.name}: ${candidates.length} candidato/i da verificare`);
+    const verified = await Promise.all(candidates.map(async (candidate) => ({ candidate, ok: await isBareDirectUrl(candidate.url, { source: candidate.source }) })));
+    for (const { candidate, ok } of verified) {
+      if (!ok) console.info(`[direct] rejected non-bare URL from ${candidate.source}`);
+    }
+    const direct = verified.filter(({ ok }) => ok).map(({ candidate }) => candidate);
+    if (direct.length) {
+      console.info(`[direct] resolver results for ${request.type}/${request.id}: ${outcomes.join(', ')}`);
+      return direct;
+    }
+  }
+  console.info(`[direct] resolver results for ${request.type}/${request.id}: ${outcomes.join(', ')}`);
+  return [];
 }
 
 module.exports = { isBareDirectUrl, resolveDirectStreams, sources };

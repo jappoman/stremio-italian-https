@@ -15,7 +15,7 @@ function manifestFor(format = 'aio') {
   const isAio = format === 'aio';
   return {
     ...baseManifest,
-    id: isAio ? baseManifest.id : `${baseManifest.id}.normal`,
+    id: isAio ? `${baseManifest.id}.aio` : baseManifest.id,
     name: isAio ? 'Italian HTTPS (AIO)' : 'Italian HTTPS',
     description: isAio
       ? `${baseManifest.description} AIOStreams fields are enabled.`

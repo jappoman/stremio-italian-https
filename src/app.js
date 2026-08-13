@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const express = require('express');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const { manifestFor } = require('./manifest');
@@ -11,21 +12,32 @@ function routerFor(format) {
   return getRouter(builder.getInterface());
 }
 
-const aioManifest = manifestFor('aio');
-const normalManifest = manifestFor('normal');
 const app = express();
 app.set('trust proxy', true);
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.set('Access-Control-Allow-Private-Network', 'true');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.use('/public', express.static(path.join(__dirname, '..', 'public')));
+
+function sendManifest(format, req, res) {
+  const base = `${req.protocol}://${req.get('host')}`;
+  const icon = `${base}/public/icon.png`;
+  res.json({ ...manifestFor(format), icon, logo: icon, favicon: icon });
+}
+
 app.get('/', (req, res) => {
   const base = `${req.protocol}://${req.get('host')}`;
-  res.type('html').send(`<!doctype html><title>Italian HTTPS</title><h1>Italian HTTPS</h1><p>Stream-only addon with no configuration.</p><p><a href="${base}/aio/manifest.json">Install AIOStreams format</a> · <a href="${base}/normal/manifest.json">Install classic Stremio format</a></p>`);
+  res.type('html').send(`<!doctype html><title>Italian HTTPS</title><h1>Italian HTTPS</h1><p>Stream-only addon with no configuration.</p><p><a href="${base}/manifest.json">Install classic Stremio format</a> · <a href="${base}/aio/manifest.json">Install AIOStreams format</a></p>`);
 });
-// /manifest.json remains the stable AIO default for existing installs.
-app.get('/manifest.json', (_req, res) => res.json(aioManifest));
-app.get('/aio/manifest.json', (_req, res) => res.json(aioManifest));
-app.get('/normal/manifest.json', (_req, res) => res.json(normalManifest));
+app.get('/manifest.json', (req, res) => sendManifest('classic', req, res));
+app.get('/aio/manifest.json', (req, res) => sendManifest('aio', req, res));
 app.use('/aio', routerFor('aio'));
-app.use('/normal', routerFor('normal'));
-app.use(routerFor('aio'));
+app.use(routerFor('classic'));
 
 module.exports = { app };
