@@ -1,0 +1,93 @@
+# Deploy the addon to AWS Lambda (serverless) with CDK v2.
+# Authentication: GitHub OIDC -> AWS role; no static AWS access keys.
+name: deploy-aws
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'infra/**'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Install infra dependencies
+        working-directory: infra
+        run: npm ci
+
+      - name: Build infra
+        working-directory: infra
+        run: npm run build
+
+      - name: Configure AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Show AWS account
+        run: aws sts get-caller-identity --query 'Account' --output text
+
+      - name: CDK synth
+        working-directory: infra
+        run: npx cdk synth
+
+      - name: CDK deploy
+        working-directory: infra
+        run: npx cdk deploy --require-approval never --outputs-file cdk-outputs.json
+
+      - name: Smoke test — /healthz must return HTTP 200
+        working-directory: infra
+        run: |
+          URL=$(jq -r '."StremioItalianHttpsStack".FunctionUrl' cdk-outputs.json | sed 's:/*$::')
+          echo "FunctionUrl: $URL"
+          CODE=$(curl -s -o /tmp/healthz.json -w '%{http_code}' "$URL/healthz")
+          echo "GET $URL/healthz -> $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::/healthz did not return 200 (got $CODE)"
+            cat /tmp/healthz.json
+            exit 1
+          fi
+
+      - name: Smoke test — /manifest.json must be a valid Stremio manifest
+        working-directory: infra
+        run: |
+          URL=$(jq -r '."StremioItalianHttpsStack".FunctionUrl' cdk-outputs.json | sed 's:/*$::')
+          curl -fsS "$URL/manifest.json" -o /tmp/manifest.json
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("/tmp/manifest.json", "utf8"));
+            if (!manifest.id || !Array.isArray(manifest.resources) || !Array.isArray(manifest.types)) {
+              console.error("::error::invalid manifest", JSON.stringify(manifest).slice(0, 300));
+              process.exit(1);
+            }
+            console.log("manifest OK:", manifest.id, manifest.version);
+          '

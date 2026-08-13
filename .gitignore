@@ -3,4 +3,6 @@ references/
 infra/node_modules/
 infra/build/
 infra/cdk.out/
+infra/cdk-outputs.json
 *.log
+.aws-github-oidc-trust.json

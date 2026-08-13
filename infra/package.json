@@ -2,10 +2,13 @@
   "name": "stremio-italian-https-infra",
   "version": "0.1.0",
   "private": true,
+  "description": "AWS CDK infrastructure for the stremio-italian-https addon (Lambda + Function URL)",
   "scripts": {
     "build": "tsc",
     "synth": "cdk synth",
-    "deploy": "cdk deploy --require-approval never"
+    "deploy": "cdk deploy --require-approval never",
+    "diff": "cdk diff",
+    "bootstrap": "cdk bootstrap"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

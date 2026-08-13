@@ -1,10 +1,18 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const { manifestFor } = require('./manifest');
 const handlers = require('./handlers');
+
+// Locally the module lives in src/ and assets are one level up; the Lambda
+// esbuild bundle lives at the archive root and carries public/ beside it.
+const bundledPublicDir = path.join(__dirname, 'public');
+const publicDir = fs.existsSync(bundledPublicDir)
+  ? bundledPublicDir
+  : path.join(__dirname, '..', 'public');
 
 function routerFor(format) {
   const builder = new addonBuilder(manifestFor(format));
@@ -23,7 +31,7 @@ app.use((req, res, next) => {
   next();
 });
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
-app.use('/public', express.static(path.join(__dirname, '..', 'public')));
+app.use('/public', express.static(publicDir));
 
 function sendManifest(format, req, res) {
   const base = `${req.protocol}://${req.get('host')}`;

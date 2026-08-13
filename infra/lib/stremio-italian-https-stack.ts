@@ -3,13 +3,16 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as path from 'path';
+import { copyStaticAssetsHooks } from './copy-static-assets';
 
 /** A single Lambda plus public Function URL; video traffic never hits Lambda. */
 export class StremioItalianHttpsStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
     const functionName = 'stremio-italian-https';
-    const repoRoot = path.join(__dirname, '..', '..', '..');
+    // CDK executes the TypeScript entry point from infra/lib, therefore the
+    // repository root is two levels above this source file.
+    const repoRoot = path.join(__dirname, '..', '..');
     const logGroup = new logs.LogGroup(this, 'AddonLogGroup', {
       logGroupName: `/aws/lambda/${functionName}`,
       retention: logs.RetentionDays.ONE_WEEK,
@@ -26,7 +29,12 @@ export class StremioItalianHttpsStack extends cdk.Stack {
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
       logGroup,
-      bundling: { minify: false, sourceMap: false, target: 'node24' },
+      bundling: {
+        minify: false,
+        sourceMap: false,
+        target: 'node24',
+        commandHooks: copyStaticAssetsHooks(),
+      },
     });
     const functionUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE, cors: undefined });
     new cdk.CfnOutput(this, 'FunctionUrl', { value: functionUrl.url });
