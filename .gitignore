@@ -1,0 +1,6 @@
+node_modules/
+references/
+infra/node_modules/
+infra/build/
+infra/cdk.out/
+*.log

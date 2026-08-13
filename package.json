@@ -1,0 +1,22 @@
+{
+  "name": "stremio-italian-https",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Direct-HTTP-only Stremio streams, formatted for AIOStreams.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "serverless-http": "^4.0.0",
+    "stremio-addon-sdk": "^1.6.10"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
