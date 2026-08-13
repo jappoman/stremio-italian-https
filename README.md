@@ -36,8 +36,10 @@ CAPTCHA o credenziali.
   di essere restituiti al player.
 - 🧭 Supporto a richieste movie, series e anime con identificativi IMDb, TMDB
   o Kitsu; per IMDb usa anche un fallback prudente sul titolo Cinemeta.
-- 🇮🇹 AnimeWorld per gli anime, solo dopo una corrispondenza esatta del titolo.
-  Le fonti che bloccano l'hosting AWS o richiedono un proxy non vengono usate.
+- 🇮🇹 Due fonti anime dirette: **AnimeWorld** e **AnimeSaturn**, entrambe
+  usate soltanto dopo una corrispondenza esatta del titolo.
+- 🚫 Le fonti che bloccano l'hosting AWS o richiedono un proxy non vengono
+  usate (ad esempio StreamingCommunity/VixSrc).
 - 📦 Variante **AIOStreams** con filename parseabile, lingua e dimensione
   quando disponibili (`behaviorHints.filename` e `videoSize`).
 - ☁️ Hosting serverless su AWS Lambda: il video va direttamente dalla fonte
@@ -76,7 +78,8 @@ remoto è necessario HTTPS.
 ## 🔎 Come funziona
 
 1. Stremio invia una richiesta stream per un titolo di un catalogo compatibile.
-2. L'addon risolve l'ID della fonte e, quando appropriato, cerca AnimeWorld.
+2. L'addon risolve l'ID della fonte e, quando appropriato, cerca AnimeWorld
+   e AnimeSaturn.
 3. Ogni URL candidato viene controllato come farebbe un player semplice:
    nessun cookie, proxy, header di playback o sessione CAPTCHA.
 4. Solo gli stream realmente riproducibili vengono restituiti.
@@ -92,19 +95,20 @@ per ordinare e visualizzare le fonti:
 
 ```json
 {
-  "name": "AnimeWorld",
-  "title": "Dragon Ball Z S1E1",
-  "description": "Dragon Ball Z S01E01.mp4\n🇮🇹 Italian",
+  "name": "AnimeSaturn",
+  "title": "Dragon Ball Z S1E1 [AnimeSaturn]",
+  "description": "Dragon Ball Z S01E01 [AnimeSaturn].mp4\n🌐 AnimeSaturn\n🇮🇹 Italian",
   "url": "https://media.example/video.mp4",
   "behaviorHints": {
-    "filename": "Dragon Ball Z S01E01.mp4"
+    "filename": "Dragon Ball Z S01E01 [AnimeSaturn].mp4"
   }
 }
 ```
 
 Quando la fonte lo consente, `behaviorHints.videoSize` contiene la dimensione
 in byte e la descrizione aggiunge una riga `📦`. I filename vengono normalizzati
-per evitare indicatori di episodio duplicati.
+per evitare indicatori di episodio duplicati; il nome della fonte resta visibile
+in AIOStreams senza prefissi aggiuntivi.
 
 ## ☁️ Deploy AWS Lambda
 
