@@ -40,13 +40,18 @@ function formatBytes(bytes) {
 }
 
 function buildStream({ source, title, url, year, season, episode, quality, language = 'ita', sizeBytes, ext, streamFormat = 'aio' }) {
-  const name = filename({ title, year, season, episode, quality, ext: ext || extension(url) });
+  // AIOStreams' formatter labels the upstream addon (Italian HTTPS), not the
+  // site selected by this resolver. Keep the latter in the parseable filename
+  // so it remains visible after AIO normalizes the response.
+  const sourceLabel = source ? `[${source}]` : '';
+  const streamTitle = [title, sourceLabel].filter(Boolean).join(' ').trim();
+  const name = filename({ title: streamTitle, year, season, episode, quality, ext: ext || extension(url) });
   if (streamFormat === 'classic') return { name: source, title: title || name, url };
   const languageLabel = languageFromCode(language);
-  const description = [name, formatBytes(sizeBytes) && `📦 ${formatBytes(sizeBytes)}`, languageLabel].filter(Boolean).join('\n');
+  const description = [name, source && `🌐 Source: ${source}`, formatBytes(sizeBytes) && `📦 ${formatBytes(sizeBytes)}`, languageLabel].filter(Boolean).join('\n');
   const behaviorHints = { filename: name, notWebReady: /\.m3u8(?:$|\?)/i.test(url) };
   if (Number.isFinite(Number(sizeBytes)) && Number(sizeBytes) > 0) behaviorHints.videoSize = Number(sizeBytes);
-  return { name: source, title: title || name, description, url, behaviorHints };
+  return { name: source, title: streamTitle || name, description, url, behaviorHints };
 }
 
 function extension(url) {
