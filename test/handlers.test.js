@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parseId, stream } = require('../src/handlers');
+const { sources } = require('../src/direct');
 
 test('parses Cinemeta movie and episode IDs', () => {
   assert.deepEqual(parseId('tt0133093'), { externalId: 'tt0133093', season: undefined, episode: undefined });
@@ -14,4 +15,8 @@ test('parses Cinemeta movie and episode IDs', () => {
 
 test('returns no stream for unsupported IDs', async () => {
   assert.deepEqual(await stream({ type: 'movie', id: 'invalid' }), { streams: [] });
+});
+
+test('only deployable direct sources are enabled', () => {
+  assert.deepEqual(sources.map((source) => source.name), ['AnimeWorld']);
 });

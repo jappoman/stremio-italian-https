@@ -36,8 +36,8 @@ CAPTCHA o credenziali.
   di essere restituiti al player.
 - 🧭 Supporto a richieste movie, series e anime con identificativi IMDb, TMDB
   o Kitsu; per IMDb usa anche un fallback prudente sul titolo Cinemeta.
-- 🇮🇹 Priorità a StreamingCommunity / VixSrc per film e serie, con fallback
-  AnimeWorld per gli anime solo dopo una corrispondenza esatta del titolo.
+- 🇮🇹 AnimeWorld per gli anime, solo dopo una corrispondenza esatta del titolo.
+  Le fonti che bloccano l'hosting AWS o richiedono un proxy non vengono usate.
 - 📦 Variante **AIOStreams** con filename parseabile, lingua e dimensione
   quando disponibili (`behaviorHints.filename` e `videoSize`).
 - ☁️ Hosting serverless su AWS Lambda: il video va direttamente dalla fonte
@@ -76,8 +76,7 @@ remoto è necessario HTTPS.
 ## 🔎 Come funziona
 
 1. Stremio invia una richiesta stream per un titolo di un catalogo compatibile.
-2. L'addon risolve l'ID della fonte e cerca in ordine StreamingCommunity /
-   VixSrc e, quando appropriato, AnimeWorld.
+2. L'addon risolve l'ID della fonte e, quando appropriato, cerca AnimeWorld.
 3. Ogni URL candidato viene controllato come farebbe un player semplice:
    nessun cookie, proxy, header di playback o sessione CAPTCHA.
 4. Solo gli stream realmente riproducibili vengono restituiti.

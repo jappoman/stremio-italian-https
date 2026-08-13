@@ -139,7 +139,14 @@ async function tmdbSeriesSearchData(externalId) {
   };
 }
 
-/** Direct StreamViX StreamingCommunity/VixSrc route, without its proxy modes. */
+/**
+ * Direct StreamViX StreamingCommunity/VixSrc route, without its proxy modes.
+ *
+ * Kept here as a documented resolver, but intentionally not enabled below:
+ * VixSrc blocks this Lambda's AWS datacenter egress with HTTP 403 on every
+ * tested movie and series endpoint. It may work from a residential IP, but a
+ * server-side addon cannot rely on it without introducing a proxy workaround.
+ */
 const vixsrc = {
   name: 'StreamingCommunity',
   async resolve(request) {
@@ -293,8 +300,10 @@ const animeWorld = {
   },
 };
 
-// Only sources that have passed a bare manifest + media-byte test belong here.
-const sources = [vixsrc, animeWorld];
+// VixSrc is deliberately excluded: AWS Lambda receives HTTP 403 consistently.
+// Only sources that work from this deployment and pass a bare media-byte test
+// belong here.
+const sources = [animeWorld];
 
 async function resolveDirectStreams(request) {
   const outcomes = [];

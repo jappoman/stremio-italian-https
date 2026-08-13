@@ -48,7 +48,7 @@ function buildStream({ source, title, url, year, season, episode, quality, langu
   const name = filename({ title: streamTitle, year, season, episode, quality, ext: ext || extension(url) });
   if (streamFormat === 'classic') return { name: source, title: title || name, url };
   const languageLabel = languageFromCode(language);
-  const description = [name, source && `🌐 Source: ${source}`, formatBytes(sizeBytes) && `📦 ${formatBytes(sizeBytes)}`, languageLabel].filter(Boolean).join('\n');
+  const description = [name, source && `🌐 ${source}`, formatBytes(sizeBytes) && `📦 ${formatBytes(sizeBytes)}`, languageLabel].filter(Boolean).join('\n');
   const behaviorHints = { filename: name, notWebReady: /\.m3u8(?:$|\?)/i.test(url) };
   if (Number.isFinite(Number(sizeBytes)) && Number(sizeBytes) > 0) behaviorHints.videoSize = Number(sizeBytes);
   return { name: source, title: streamTitle || name, description, url, behaviorHints };
