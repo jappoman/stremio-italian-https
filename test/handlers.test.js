@@ -18,5 +18,5 @@ test('returns no stream for unsupported IDs', async () => {
 });
 
 test('only deployable direct sources are enabled', () => {
-  assert.deepEqual(sources.map((source) => source.name), ['AnimeWorld']);
+  assert.deepEqual(sources.map((source) => source.name), ['AnimeWorld', 'AnimeSaturn']);
 });

@@ -139,6 +139,20 @@ async function tmdbSeriesSearchData(externalId) {
   };
 }
 
+async function tmdbMovieSearchData(externalId) {
+  const tmdbId = await tmdbIdFor(externalId, 'movie');
+  if (!tmdbId) return null;
+  const data = await fetchJson(`https://api.themoviedb.org/3/movie/${tmdbId}?api_key=${TMDB_KEY}&language=it-IT&append_to_response=alternative_titles`);
+  const titles = uniqueTitles([
+    data.title,
+    data.original_title,
+    ...(data.alternative_titles?.titles || []).map((item) => item.title),
+  ]);
+  const isAnimation = (data.genres || []).some((genre) => genre.id === 16);
+  console.info(`[TMDB] ${externalId} -> film ${tmdbId}; animazione=${isAnimation ? 'sì' : 'no'}; titoli=${titles.map((title) => JSON.stringify(title)).join(', ') || '-'}`);
+  return { isAnimation, titles };
+}
+
 /**
  * Direct StreamViX StreamingCommunity/VixSrc route, without its proxy modes.
  *
@@ -300,13 +314,116 @@ const animeWorld = {
   },
 };
 
+const AS_BASE = 'https://www.animesaturn.net';
+const AS_UA = AW_UA;
+let animeSaturnCookie;
+
+function asSetCookie(response) {
+  const values = typeof response.headers.getSetCookie === 'function'
+    ? response.headers.getSetCookie()
+    : [response.headers.get('set-cookie')];
+  const pairs = values.filter(Boolean).map((value) => String(value).split(';')[0]).filter(Boolean);
+  if (pairs.length) animeSaturnCookie = pairs.join('; ');
+}
+
+async function asFetch(path, init = {}) {
+  const headers = { 'user-agent': AS_UA, 'accept-language': 'it-IT,it;q=0.9,en;q=0.8', ...(init.headers || {}) };
+  if (animeSaturnCookie) headers.cookie = animeSaturnCookie;
+  const response = await fetch(new URL(path, AS_BASE), { ...init, headers, signal: AbortSignal.timeout(12000) });
+  asSetCookie(response);
+  if (!response.ok) throw new Error(`AnimeSaturn HTTP ${response.status}`);
+  return { body: await response.text(), status: response.status };
+}
+
+function animeSaturnMatches(html) {
+  const matches = [...String(html).matchAll(/<a\b[^>]*href=["']\/anime\/([^/?#"']+)[^>]*>[\s\S]{0,900}?<h3[^>]*>\s*([^<]+?)\s*<\/h3>/gi)]
+    .map((match) => ({ slug: match[1], title: match[2].trim() }));
+  return [...new Map(matches.map((match) => [match.slug, match])).values()];
+}
+
+function animeSaturnEmbedUrl(html) {
+  const text = String(html).replace(/&amp;/g, '&').replace(/\\\//g, '/');
+  return /https:\/\/play\.saturncdn\.net\/embed\/\d+\?token=[^\s"'<>&]+&expires=\d+/i.exec(text)?.[0] || null;
+}
+
+function decodeAnimeSaturnUrl(encoded, key) {
+  const bytes = Buffer.from(String(encoded), 'base64');
+  let value = '';
+  for (let index = 0; index < bytes.length; index += 1) value += String.fromCharCode(bytes[index] ^ key.charCodeAt(index % key.length));
+  return value;
+}
+
+async function animeSaturnMediaUrl(embedUrl) {
+  const embed = await asFetch(embedUrl, { headers: { referer: `${AS_BASE}/` } });
+  const id = /\bi\s*:\s*(\d+)/.exec(embed.body)?.[1];
+  const key = /\bk\s*:\s*["']([^"']+)/.exec(embed.body)?.[1];
+  const expires = /\be\s*:\s*(\d+)/.exec(embed.body)?.[1];
+  if (!id || !key || !expires) return null;
+  const playlist = await asFetch(`/embed/${id}/playlist?token=${encodeURIComponent(key)}&expires=${expires}`, {
+    headers: { referer: embedUrl, accept: 'application/json' },
+  });
+  let payload;
+  try { payload = JSON.parse(playlist.body); } catch { return null; }
+  const url = payload?.d ? decodeAnimeSaturnUrl(payload.d, key) : null;
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.toString() : null;
+  } catch { return null; }
+}
+
+const animeSaturn = {
+  name: 'AnimeSaturn',
+  async resolve(request) {
+    try {
+      let titles;
+      let requestedEpisode = request.episode || 1;
+      if (request.type === 'anime' && /^kitsu:\d+$/i.test(request.id)) {
+        const kitsu = await fetchJson(`https://kitsu.io/api/edge/anime/${request.id.slice('kitsu:'.length)}`);
+        titles = uniqueTitles([kitsu?.data?.attributes?.titles?.en, kitsu?.data?.attributes?.titles?.en_jp, kitsu?.data?.attributes?.canonicalTitle]);
+      } else if (request.type === 'series') {
+        const metadata = await tmdbSeriesSearchData(request.id);
+        if (!metadata?.isAnimation) return [];
+        titles = metadata.titles;
+      } else if (request.type === 'movie') {
+        const metadata = await tmdbMovieSearchData(request.id);
+        if (!metadata?.isAnimation) return [];
+        titles = metadata.titles;
+      } else return [];
+
+      let selected;
+      let title;
+      for (const candidateTitle of titles) {
+        const search = await asFetch(`/filter?key=${encodeURIComponent(candidateTitle)}`);
+        const matches = animeSaturnMatches(search.body);
+        const exact = matches.find((match) => comparableAnimeWorldTitle(match.title) === comparableTitle(candidateTitle));
+        console.info(`[AnimeSaturn] ricerca ${JSON.stringify(candidateTitle)} -> HTTP ${search.status}, ${matches.length} risultati`);
+        if (exact) { selected = exact; title = exact.title; break; }
+      }
+      if (!selected) return [];
+      const watch = await asFetch(`/anime/${selected.slug}/ep-${requestedEpisode}`);
+      const embedUrl = animeSaturnEmbedUrl(watch.body);
+      if (!embedUrl) {
+        console.info(`[AnimeSaturn] ${selected.slug} episodio ${requestedEpisode}: embed non trovato`);
+        return [];
+      }
+      const url = await animeSaturnMediaUrl(embedUrl);
+      console.info(`[AnimeSaturn] ${selected.slug} episodio ${requestedEpisode}: media=${url ? safeUrlLabel(url) : 'non trovato'}`);
+      return url ? [{ source: this.name, title: `${title} S${request.season || 1}E${requestedEpisode}`, url, language: /(?:ITA|ITALIAN)/i.test(url) ? 'ita' : 'jpn' }] : [];
+    } catch (error) {
+      console.warn('[direct][animesaturn] skipped:', error.message);
+      return [];
+    }
+  },
+};
+
 // VixSrc is deliberately excluded: AWS Lambda receives HTTP 403 consistently.
 // Only sources that work from this deployment and pass a bare media-byte test
 // belong here.
-const sources = [animeWorld];
+const sources = [animeWorld, animeSaturn];
 
 async function resolveDirectStreams(request) {
   const outcomes = [];
+  const directStreams = [];
   for (const source of sources) {
     let candidates = [];
     try {
@@ -324,13 +441,10 @@ async function resolveDirectStreams(request) {
       if (!ok) console.info(`[direct] rejected non-bare URL from ${candidate.source}`);
     }
     const direct = verified.filter(({ ok }) => ok).map(({ candidate }) => candidate);
-    if (direct.length) {
-      console.info(`[direct] resolver results for ${request.type}/${request.id}: ${outcomes.join(', ')}`);
-      return direct;
-    }
+    directStreams.push(...direct);
   }
   console.info(`[direct] resolver results for ${request.type}/${request.id}: ${outcomes.join(', ')}`);
-  return [];
+  return directStreams;
 }
 
 module.exports = { isBareDirectUrl, resolveDirectStreams, sources };
