@@ -23,6 +23,14 @@ function routerFor(format) {
 const app = express();
 app.set('trust proxy', true);
 app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    // Do not log query strings: configured addon URLs can contain secrets.
+    console.info(`[http] ${req.method} ${req.path} -> ${res.statusCode} in ${Date.now() - startedAt}ms`);
+  });
+  next();
+});
+app.use((req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
