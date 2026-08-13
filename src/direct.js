@@ -15,15 +15,24 @@ function safeUrlLabel(url) {
   }
 }
 
-async function isBareDirectUrl(url, { timeoutMs = 8000, source = 'source' } = {}) {
+function mediaSizeFromResponse(response) {
+  const range = response.headers.get('content-range');
+  const total = /\/(\d+)$/.exec(range || '')?.[1];
+  if (total && Number(total) > 0) return Number(total);
+  // A server that ignores Range may send its whole body with HTTP 200.
+  const length = response.headers.get('content-length');
+  return response.status === 200 && length && Number(length) > 0 ? Number(length) : undefined;
+}
+
+async function probeBareDirectUrl(url, { timeoutMs = 8000, source = 'source' } = {}) {
   let parsed;
   try { parsed = new URL(url); } catch {
     console.info(`[probe][${source}] URL non valido`);
-    return false;
+    return { ok: false };
   }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     console.info(`[probe][${source}] protocollo non supportato: ${parsed.protocol}`);
-    return false;
+    return { ok: false };
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -36,18 +45,22 @@ async function isBareDirectUrl(url, { timeoutMs = 8000, source = 'source' } = {}
     });
     if (!response.ok && response.status !== 206) {
       console.info(`[probe][${source}] ${safeUrlLabel(url)} -> HTTP ${response.status}: SCARTATO`);
-      return false;
+      return { ok: false };
     }
     const type = response.headers.get('content-type') || '';
     const accepted = /video|audio|mpegurl|octet-stream/i.test(type) || /\.(?:m3u8|mp4|mkv|webm|ts)(?:$|[?#])/i.test(response.url);
     console.info(`[probe][${source}] ${safeUrlLabel(url)} -> HTTP ${response.status}, content-type=${type || '-'}: ${accepted ? 'OK' : 'SCARTATO'}`);
-    return accepted;
+    return { ok: accepted, sizeBytes: accepted ? mediaSizeFromResponse(response) : undefined };
   } catch (error) {
     console.info(`[probe][${source}] ${safeUrlLabel(url)} -> errore ${error.name || 'di rete'}: SCARTATO`);
-    return false;
+    return { ok: false };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function isBareDirectUrl(url, options) {
+  return (await probeBareDirectUrl(url, options)).ok;
 }
 
 /**
@@ -436,11 +449,11 @@ async function resolveDirectStreams(request) {
     }
     outcomes.push(`${source.name}:${candidates.length}`);
     console.info(`[direct] ${source.name}: ${candidates.length} candidato/i da verificare`);
-    const verified = await Promise.all(candidates.map(async (candidate) => ({ candidate, ok: await isBareDirectUrl(candidate.url, { source: candidate.source }) })));
+    const verified = await Promise.all(candidates.map(async (candidate) => ({ candidate, ...(await probeBareDirectUrl(candidate.url, { source: candidate.source })) })));
     for (const { candidate, ok } of verified) {
       if (!ok) console.info(`[direct] rejected non-bare URL from ${candidate.source}`);
     }
-    const direct = verified.filter(({ ok }) => ok).map(({ candidate }) => candidate);
+    const direct = verified.filter(({ ok }) => ok).map(({ candidate, sizeBytes }) => ({ ...candidate, sizeBytes: sizeBytes || candidate.sizeBytes }));
     directStreams.push(...direct);
   }
   console.info(`[direct] resolver results for ${request.type}/${request.id}: ${outcomes.join(', ')}`);
